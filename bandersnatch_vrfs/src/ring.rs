@@ -4,15 +4,18 @@ use alloc::vec::Vec;
 
 use ark_ff::{Field, MontFp};
 use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid,
-    Validate, Write,
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
 };
-use ark_std::{rand::{Rng, SeedableRng}, vec};
-use ring::{Transcript, pcs::PCS, Domain, ring::Ring};
+use ark_std::{
+    rand::{Rng, SeedableRng},
+    vec,
+};
+use ring::{pcs::PCS, ring::Ring, ArkTranscript as Transcript, Domain};
 
-use crate::bandersnatch::{Fq, SWAffine, SWConfig, BandersnatchConfig};
-use crate::bls12_381::Bls12_381;
+use crate::bandersnatch::{BandersnatchConfig, Fq, SWAffine, SWConfig};
 use crate::bls12_381;
+use crate::bls12_381::Bls12_381;
 
 type RealKZG = ring::pcs::kzg::KZG<Bls12_381>;
 
@@ -20,8 +23,8 @@ type PcsParams = ring::pcs::kzg::urs::URS<Bls12_381>;
 
 pub type PiopParams = ring::PiopParams<Fq, SWConfig>;
 pub type RingProof = ring::RingProof<Fq, RealKZG>;
-pub type RingProver = ring::ring_prover::RingProver<Fq, RealKZG, SWConfig>;
-pub type RingVerifier = ring::ring_verifier::RingVerifier<Fq, RealKZG, SWConfig>;
+pub type RingProver = ring::ring_prover::RingProver<Fq, RealKZG, SWConfig, Transcript>;
+pub type RingVerifier = ring::ring_verifier::RingVerifier<Fq, RealKZG, SWConfig, Transcript>;
 
 pub type ProverKey = ring::ProverKey<Fq, RealKZG, SWAffine>;
 pub type VerifierKey = ring::VerifierKey<Fq, RealKZG>;
@@ -34,14 +37,17 @@ pub type RingCommitment = Ring<bls12_381::Fr, Bls12_381, BandersnatchConfig>;
 // Used as the point to start summation from, as inf doesn't have an affine representation.
 const COMPLEMENT_POINT: crate::Jubjub = {
     const X: Fq = Fq::ZERO;
-    const Y: Fq = MontFp!("11982629110561008531870698410380659621661946968466267969586599013782997959645");
+    const Y: Fq =
+        MontFp!("11982629110561008531870698410380659621661946968466267969586599013782997959645");
     crate::Jubjub::new_unchecked(X, Y)
 };
 
 // Just a point of an unknown dlog.
 pub(crate) const PADDING_POINT: crate::Jubjub = {
-    const X: Fq = MontFp!("25448400713078632486748382313960039031302935774474538965225823993599751298535");
-    const Y: Fq = MontFp!("24382892199244280513693545286348030912870264650402775682704689602954457435722");
+    const X: Fq =
+        MontFp!("25448400713078632486748382313960039031302935774474538965225823993599751298535");
+    const Y: Fq =
+        MontFp!("24382892199244280513693545286348030912870264650402775682704689602954457435722");
     crate::Jubjub::new_unchecked(X, Y)
 };
 
@@ -93,7 +99,7 @@ impl KZG {
 
     pub fn kzg_setup(domain_size: usize, srs: StaticProverKey) -> Self {
         let piop_params = make_piop_params(domain_size);
-        let pcs_params = ring::pcs::kzg::urs::URS  {
+        let pcs_params = ring::pcs::kzg::urs::URS {
             powers_in_g1: srs.mon_g1,
             powers_in_g2: vec![srs.kzg_vk.g2, srs.kzg_vk.tau_in_g2],
         };
@@ -105,7 +111,7 @@ impl KZG {
     }
 
     // Testing only kzg setup.
-    pub fn testing_kzg_setup(preseed: [u8;32], domain_size: u32) -> Self {
+    pub fn testing_kzg_setup(preseed: [u8; 32], domain_size: u32) -> Self {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(preseed);
         Self::insecure_kzg_setup(domain_size, &mut rng)
     }
@@ -116,7 +122,7 @@ impl KZG {
 
     /*
     // Unecessary but right now our own padding is broken, and it's maybe not flexible enough anyways.
-	// https://github.com/w3f/ring-proof/blob/master/ring/src/piop/params.rs#L56
+    // https://github.com/w3f/ring-proof/blob/master/ring/src/piop/params.rs#L56
     pub fn padding_point(&self) -> SWAffine {
         let mut seed = self.seed.clone();
         seed.reverse();
@@ -135,11 +141,20 @@ impl KZG {
 
     /// `k` is the prover secret index in [0..keyset_size).
     pub fn init_ring_prover(&self, prover_key: ProverKey, k: usize) -> RingProver {
-        RingProver::init(prover_key, self.piop_params.clone(), k, Transcript::new(b"ring-vrf-test"))
+        RingProver::init(
+            prover_key,
+            self.piop_params.clone(),
+            k,
+            Transcript::new(b"ring-vrf-test"),
+        )
     }
 
     pub fn init_ring_verifier(&self, verifier_key: VerifierKey) -> RingVerifier {
-        RingVerifier::init(verifier_key, self.piop_params.clone(), Transcript::new(b"ring-vrf-test"))
+        RingVerifier::init(
+            verifier_key,
+            self.piop_params.clone(),
+            Transcript::new(b"ring-vrf-test"),
+        )
     }
 }
 
@@ -148,17 +163,15 @@ impl CanonicalSerialize for KZG {
     fn serialize_with_mode<W: Write>(
         &self,
         mut writer: W,
-        compress: Compress
-    ) -> Result<(), SerializationError> 
-    {
-        self.domain_size.serialize_compressed(&mut writer) ?;
-        self.pcs_params.serialize_with_mode(&mut writer, compress) ?;
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        self.domain_size.serialize_compressed(&mut writer)?;
+        self.pcs_params.serialize_with_mode(&mut writer, compress)?;
         Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
-        self.domain_size.compressed_size()
-        + self.pcs_params.serialized_size(compress)
+        self.domain_size.compressed_size() + self.pcs_params.serialized_size(compress)
     }
 }
 
@@ -166,12 +179,15 @@ impl CanonicalDeserialize for KZG {
     fn deserialize_with_mode<R: Read>(
         mut reader: R,
         compress: Compress,
-        validate: Validate
-    ) -> Result<Self, SerializationError>
-    {
-        let domain_size = <u32 as CanonicalDeserialize>::deserialize_compressed(&mut reader) ?;
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let domain_size = <u32 as CanonicalDeserialize>::deserialize_compressed(&mut reader)?;
         let piop_params = make_piop_params(domain_size as usize);
-        let pcs_params = <PcsParams as CanonicalDeserialize>::deserialize_with_mode(&mut reader, compress, validate) ?;
+        let pcs_params = <PcsParams as CanonicalDeserialize>::deserialize_with_mode(
+            &mut reader,
+            compress,
+            validate,
+        )?;
         Ok(KZG {
             domain_size,
             piop_params,
@@ -192,7 +208,10 @@ mod tests {
 
     #[test]
     fn check_complement_point() {
-        assert_eq!(COMPLEMENT_POINT, ring::find_complement_point::<crate::bandersnatch::BandersnatchConfig>());
+        assert_eq!(
+            COMPLEMENT_POINT,
+            ring::find_complement_point::<crate::bandersnatch::BandersnatchConfig>()
+        );
     }
 
     #[test]
